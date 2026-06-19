@@ -12,6 +12,8 @@ use core::net::{Ipv6Addr, SocketAddrV6};
 
 use defmt::info;
 
+use embedded_alloc::LlffHeap as Heap;
+
 use embassy_executor::InterruptExecutor;
 use embassy_executor::Spawner;
 
@@ -23,6 +25,7 @@ use embassy_nrf::rng::Rng;
 use embassy_nrf::{bind_interrupts, peripherals, radio};
 
 use openthread::nrf::{Ieee802154, NrfRadio};
+use openthread::sys::otRadioCaps;
 use openthread::{
     BytesFmt, EmbassyTimeTimer, OpenThread, OtResources, OtUdpResources, PhyRadioRunner,
     ProxyRadio, ProxyRadioResources, Radio, SimpleRamSettings, UdpSocket,
@@ -71,6 +74,16 @@ const THREAD_DATASET: &str = if let Some(dataset) = option_env!("THREAD_DATASET"
     "0e080000000000010000000300000b35060004001fffe002083a90e3a319a904940708fd1fa298dbd1e3290510fe0458f7db96354eaa6041b880ea9c0f030f4f70656e5468726561642d35386431010258d10410888f813c61972446ab616ee3c556a5910c0402a0f7f8"
 };
 
+const NRF_RADIO_CAPS: otRadioCaps = NrfRadio::CAPS.bits();
+
+// Only needed for tinyrlibc's alloc functions which won't be called at runtime.
+//
+// If the firmware would not use or need heap allocation for other purposes, this could be replaced
+// with stub impls of `calloc` and `free` that panic with `unimplemented!()`,
+// and the `#[global_allocator]` attribute could be removed.
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let mut config = embassy_nrf::config::Config::default();
@@ -99,26 +112,24 @@ async fn main(spawner: Spawner) {
 
     info!("About to spawn OT runner");
 
-    let mut radio = NrfRadio::new(Ieee802154::new(p.RADIO, Irqs));
+    let radio = NrfRadio::new(Ieee802154::new(p.RADIO, Irqs));
 
     let proxy_radio_resources = mk_static!(ProxyRadioResources, ProxyRadioResources::new());
-    let (proxy_radio, phy_radio_runner) = ProxyRadio::new(radio.caps(), proxy_radio_resources);
+    let (proxy_radio, phy_radio_runner) = ProxyRadio::new(proxy_radio_resources);
 
     // High-priority executor: EGU0_SWI0, priority level 7
     interrupt::EGU0_SWI0.set_priority(Priority::P7);
 
     let spawner_high = EXECUTOR_HIGH.start(interrupt::EGU0_SWI0);
-    spawner_high
-        .spawn(run_radio(phy_radio_runner, radio))
-        .unwrap();
+    spawner_high.spawn(run_radio(phy_radio_runner, radio).unwrap());
 
     info!("Radio created");
 
-    spawner.spawn(run_ot(ot.clone(), proxy_radio)).unwrap();
+    spawner.spawn(run_ot(ot.clone(), proxy_radio).unwrap());
 
     info!("About to spawn OT IP info");
 
-    spawner.spawn(run_ot_ip_info(ot.clone())).unwrap();
+    spawner.spawn(run_ot_ip_info(ot.clone()).unwrap());
 
     info!("Dataset: {}", THREAD_DATASET);
 
@@ -150,7 +161,7 @@ async fn main(spawner: Spawner) {
 }
 
 #[embassy_executor::task]
-async fn run_ot(ot: OpenThread<'static>, radio: ProxyRadio<'static>) -> ! {
+async fn run_ot(ot: OpenThread<'static>, radio: ProxyRadio<'static, NRF_RADIO_CAPS>) -> ! {
     ot.run(radio).await
 }
 

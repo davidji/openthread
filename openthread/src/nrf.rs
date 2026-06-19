@@ -50,7 +50,40 @@ impl<'a> NrfRadio<'a>
             Cca::CarrierAndEd { ed_threshold } => RadioCca::EnergyDetection { ed_threshold },
             Cca::CarrierOrEd { ed_threshold } => RadioCca::EnergyDetection { ed_threshold },
         });
-        self.driver.set_transmission_power(config.power);
+        self.driver
+            .set_transmission_power(Self::clamp_tx_power(config.power));
+    }
+
+    /// Snap a requested transmit power (in dBm) to a value the nRF radio's
+    /// `set_transmission_power` accepts.
+    ///
+    /// `Config::power` is a cross-platform dBm value.
+    /// The nRF radio however only supports a discrete set of dBm levels with
+    /// a much lower ceiling (+8 dBm on the nRF52840), and `embassy-nrf`'s
+    /// `set_transmission_power` *panics* on any value not in that set. So map the
+    /// request to the highest supported level not exceeding it (clamping to the
+    /// min/max of the supported range), which both avoids the panic and applies
+    /// the closest power the radio can actually produce.
+    fn clamp_tx_power(power: i8) -> i8 {
+        // The dBm levels `embassy-nrf` accepts for the nRF52840, descending.
+        // Other nRF variants support a subset (e.g. the nRF52811 / nRF5340
+        // network core drop the higher positive levels), but these are the ones
+        // this driver targets. Keep in sync with `embassy_nrf`'s
+        // `Radio::set_transmission_power`.
+        //
+        // TODO: This table is nRF52840-specific. If/when this driver targets
+        // other nRF variants (nRF52811, nRF5340 net core, ...), gate it by chip
+        // `cfg` to match `embassy_nrf`'s own per-chip `match` arms (the higher
+        // positive levels are unavailable on some, and the 5340 net core adds
+        // extra negative levels).
+        const SUPPORTED_DBM: [i8; 15] = [8, 7, 6, 5, 4, 3, 2, 0, -4, -8, -12, -16, -20, -30, -40];
+
+        // Highest supported level <= requested power; if the request is below the
+        // minimum, use the minimum.
+        SUPPORTED_DBM
+            .into_iter()
+            .find(|&level| level <= power)
+            .unwrap_or(SUPPORTED_DBM[SUPPORTED_DBM.len() - 1])
     }
 }
 
@@ -58,14 +91,10 @@ impl Radio for NrfRadio<'_>
 {
     type Error = Error;
 
-    fn caps(&mut self) -> Capabilities {
-        Capabilities::RX_WHEN_IDLE
-    }
+    const CAPS: Capabilities = Capabilities::empty();
 
-    fn mac_caps(&mut self) -> MacCapabilities {
-        // The NRF radio does not have any MAC offloading capabilities
-        MacCapabilities::empty()
-    }
+    // The NRF radio does not have any MAC offloading capabilities
+    const MAC_CAPS: MacCapabilities = MacCapabilities::empty();
 
     async fn set_config(&mut self, config: &Config) -> Result<(), Self::Error> {
         if self.config != *config {
@@ -81,6 +110,7 @@ impl Radio for NrfRadio<'_>
     async fn transmit(
         &mut self,
         psdu: &[u8],
+        _csma: bool,
         _ack_psdu_buf: Option<&mut [u8]>,
     ) -> Result<Option<PsduMeta>, Self::Error> {
         trace!("NRF Radio, about to transmit: {}", Bytes(psdu));

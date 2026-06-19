@@ -684,19 +684,31 @@ impl OpenThread<'_> {
     }
 
     /// Return `true` if the SRP client is in auto-start mode, `false` otherwise.
+    ///
+    /// Note: unlike most SRP APIs, this does not require the `OpenThread` instance
+    /// to have been created with SRP resources (see [`OpenThread::srp_autostart`]).
     pub fn srp_autostart_enabled(&self) -> Result<bool, OtError> {
         let mut ot = self.activate();
         let instance = ot.state().ot.instance;
-        let _ = ot.state().srp()?;
 
         Ok(unsafe { otSrpClientIsAutoStartModeEnabled(instance) })
     }
 
     /// Auto-starts the SRP client.
+    ///
+    /// This only flips the auto-start flag on the underlying OpenThread instance
+    /// and registers the (state-guarded) auto-start callback; it does NOT touch
+    /// the Rust-side SRP state buffers. It therefore does not require the
+    /// `OpenThread` instance to have been created with SRP resources (i.e. via a
+    /// `new_with*_srp` constructor) - a plain `new`/`new_with_udp` instance works.
+    ///
+    /// This matters because enabling SRP auto-start is also what lets OpenThread's
+    /// DNS client auto-discover the server to query (it adopts the SRP/DNS-SD
+    /// server address auto-start selects from network data). A DNS-client-only
+    /// consumer can thus enable server discovery without allocating SRP resources.
     pub fn srp_autostart(&self) -> Result<(), OtError> {
         let mut ot = self.activate();
         let instance = ot.state().ot.instance;
-        let _ = ot.state().srp()?;
 
         unsafe {
             otSrpClientEnableAutoStartMode(
@@ -934,13 +946,15 @@ impl OtContext<'_> {
 
     pub(crate) fn plat_srp_changed(
         &mut self,
-        host_info: &otSrpClientHostInfo,
+        host_info: Option<&otSrpClientHostInfo>,
         _services: Option<&otSrpClientService>,
         removed_services: Option<&otSrpClientService>,
     ) {
         trace!("Plat changed callback");
 
-        self.cleanup(host_info, removed_services);
+        if let Some(host_info) = host_info {
+            self.cleanup(host_info, removed_services);
+        }
 
         let state = self.state();
         if let Ok(srp) = state.srp() {

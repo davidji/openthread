@@ -2,41 +2,134 @@
 name = "openthread"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.84"
 resolver = "2"
 categories = ["embedded", "hardware-support"]
 keywords = ["thread", "openthread", "embedded", "embassy"]
-description = "Raw bindings for OpenThread"
-repository = "https://github.com/ivmarkov/esp-openthread"
-license = "MIT OR Apache-2.0"
+description = "Platform-agnostic, async Rust bindings for OpenThread"
+repository = "https://github.com/esp-rs/openthread"
 readme = "README.md"
-rust-version = "1.84"
 
 [lib]
 harness = false
 
 [features]
-default = []
+default = ["matter", "mbedtls-rs-sys"]
 edge-nal = ["udp", "dep:edge-nal"]
+# UDP is always available in OpenThread (core); this feature gates the Rust
+# UDP API surface.
 udp = []
-srp = ["udp"]
-defmt = ["dep:defmt", "heapless/defmt-03", "embassy-time/defmt"]
+# SRP client: gates the Rust SRP API and compiles in OpenThread's SRP client.
+srp = ["udp", "openthread-sys/srp-client"]
+# Device-type / radio-location selection (additive; absence = the default).
+#   ftd off -> MTD end-device (default);  ftd on -> FTD (router-capable)
+#   rcp     -> the 802.15.4 radio is a separate RCP chip reached over a UART/SPI
+#              (spinel) transport; this MCU runs the full stack and drives the
+#              remote radio. Off (default) = the radio is local to this MCU.
+#              NOTE: `rcp` changes the platform integration — instead of a local
+#              `Radio` implementation, the user supplies a spinel transport (see
+#              the crate docs / `OpenThread` RCP-host API).
+ftd = ["openthread-sys/ftd"]
+rcp = ["openthread-sys/rcp"]
+# Build OpenThread against the external MbedTLS (`mbedtls-rs-sys`) rather than
+# its own bundled MbedTLS. On by default; omit (with `default-features = false`)
+# to use the bundled MbedTLS and drop the `mbedtls-rs-sys` dependency.
+mbedtls-rs-sys = ["openthread-sys/mbedtls-rs-sys"]
+# Heap configuration (see `openthread-sys`). OpenThread keeps one fixed-size
+# internal heap buffer, shared by its own code and (by default) MbedTLS. Three
+# independent axes tune it:
+#   - `heap-ext-ot`: redirect OpenThread's OWN heap to the global allocator
+#     (`HEAP_EXTERNAL_ENABLE`). The consumer must provide `otPlatCAlloc`/
+#     `otPlatFree`, just as it provides `calloc`/`free` for MbedTLS.
+#   - `heap-ext-mbedtls`: redirect MbedTLS to the global `calloc`/`free` instead
+#     of the internal buffer. Only effective with `mbedtls-rs-sys`.
+#   - `heap-int-<N>`: resize the internal buffer to N bytes (largest wins). The
+#     internal buffer may still be used by whichever consumer is not redirected.
+heap-ext-ot = ["openthread-sys/heap-ext-ot"]
+heap-ext-mbedtls = ["openthread-sys/heap-ext-mbedtls"]
+heap-int-4096 = ["openthread-sys/heap-int-4096"]
+heap-int-6144 = ["openthread-sys/heap-int-6144"]
+heap-int-8192 = ["openthread-sys/heap-int-8192"]
+heap-int-12288 = ["openthread-sys/heap-int-12288"]
+heap-int-16384 = ["openthread-sys/heap-int-16384"]
+heap-int-32768 = ["openthread-sys/heap-int-32768"]
+heap-int-49152 = ["openthread-sys/heap-int-49152"]
+heap-int-65536 = ["openthread-sys/heap-int-65536"]
+defmt = ["dep:defmt", "heapless/defmt", "embassy-time/defmt"]
 force-generate-bindings = ["openthread-sys/force-generate-bindings"]
-force-esp-riscv-toolchain = ["openthread-sys/force-esp-riscv-toolchain"]
+force-esp-riscv-gcc = ["openthread-sys/force-esp-riscv-gcc"]
+# Use GCC instead of clang
+use-gcc = ["openthread-sys/use-gcc"]
 isupper = [] # Provide internal implementation of the `isupper` C fn
 
+# ---------------------------------------------------------------------------
+# Features controlling what OpenThread aspects get compiled in.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Consumer bundles (flat: each lists every leaf it needs).
+# ---------------------------------------------------------------------------
+
+# Barebones profile for Matter
+matter = ["srp", "openthread-sys/matter"]
+
+# ---------------------------------------------------------------------------
+# OpenThread capability features. Each re-exports the corresponding
+# `openthread-sys` knob (compiling the feature into the C library) and is the
+# gate the high-level Rust API uses. `openthread` aims to wrap most of
+# OpenThread's capabilities, so these are surfaced here rather than requiring
+# the user to reach into `openthread-sys` directly.
+#
+# (Device type MTD/FTD and co-processor role NCP/RCP are not features — those
+# are separate `.a` archives selected at link time; see `openthread-sys`.)
+# ---------------------------------------------------------------------------
+
+srp-server = ["openthread-sys/srp-server"]
+dns-client = ["openthread-sys/dns-client"]
+dnssd-server = ["openthread-sys/dnssd-server"]
+mdns = ["openthread-sys/mdns"]
+service = ["openthread-sys/service"]
+netdata-publisher = ["openthread-sys/netdata-publisher"]
+coap = ["openthread-sys/coap"]
+coap-block = ["openthread-sys/coap-block"]
+coap-observe = ["openthread-sys/coap-observe"]
+coaps = ["openthread-sys/coaps"]
+tcp = ["openthread-sys/tcp"]
+slaac = ["openthread-sys/slaac"]
+dhcp6-client = ["openthread-sys/dhcp6-client"]
+dhcp6-server = ["openthread-sys/dhcp6-server"]
+nat64 = ["openthread-sys/nat64"]
+joiner = ["openthread-sys/joiner"]
+commissioner = ["openthread-sys/commissioner"]
+border-router = ["openthread-sys/border-router"]
+border-routing = ["openthread-sys/border-routing"]
+ping-sender = ["openthread-sys/ping-sender"]
+link-metrics-initiator = ["openthread-sys/link-metrics-initiator"]
+link-metrics-subject = ["openthread-sys/link-metrics-subject"]
+mac-filter = ["openthread-sys/mac-filter"]
+jam-detection = ["openthread-sys/jam-detection"]
+child-supervision = ["openthread-sys/child-supervision"]
+mesh-diag = ["openthread-sys/mesh-diag"]
+history-tracker = ["openthread-sys/history-tracker"]
+dataset-updater = ["openthread-sys/dataset-updater"]
+ecdsa = ["openthread-sys/ecdsa"]
+sntp-client = ["openthread-sys/sntp-client"]
+trel = ["openthread-sys/trel"]
+
 [dependencies]
-openthread-sys = { path = "../openthread-sys" }
-log = { version = "0.4.28", default-features = false, optional = true }
-defmt = { version = "1.0.1", default-features = false, optional = true, features = ["ip_in_core"] }
-scopeguard = { version = "1.2.0", default-features = false }
-rand_core = "0.9.5"
-embassy-sync = "0.7.2"
-embassy-time = "0.5.0"
-embassy-futures = "0.1.2"
-heapless = "0.8"
-bitflags = "2.9.4"
-embassy-net-driver-channel = { version = "0.3.2", optional = true }
-edge-nal = { version = "0.6.0", optional = true }
-esp-ieee802154 = { version = "0.8", optional = true }
-embassy-nrf = { version = "0.9.0", optional = true }
+openthread-sys = { path = "../openthread-sys", default-features = false }
+log = { version = "0.4", default-features = false, optional = true }
+defmt = { version = "1.0", default-features = false, optional = true, features = ["ip_in_core"] }
+scopeguard = { version = "1", default-features = false }
+rand_core = "0.9"
+embassy-sync = "0.8"
+embassy-time = "0.5"
+embassy-futures = "0.1"
+heapless = "0.9"
+bitflags = "2.9"
+embassy-net-driver-channel = { version = "0.3", optional = true }
+edge-nal = { version = "0.6", optional = true }
+esp-radio = { version = "0.18", features = ["unstable", "ieee802154"], optional = true }
+embassy-nrf = { version = "0.10", optional = true }
 portable-atomic = "1"

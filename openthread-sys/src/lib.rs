@@ -1,7 +1,44 @@
+//! Low-level bindings to the OpenThread library.
+//!
+//! # External dependencies
+//!
+//! Openthread depends on functions from the C standard library. These are not
+//! provided directly by this crate, but are expected to be linked by the user
+//! in some way.
+//!
+//! The following functions are required:
+//!
+//! - `exit`
+//! - `iscntrl`
+//! - `isprint`
+//! - `memchr`
+//! - `memcmp`
+//! - `memcpy`
+//! - `memmove`
+//! - `memset`
+//! - `strchr`
+//! - `strcmp`
+//! - `strcpy`
+//! - `strlen`
+//! - `strncpy`
+//! - `strstr`
+//!
+//! The following functions are required, but this crate already provides an
+//! implementation for them:
+//!
+//! - `snprintf`
+//! - `vsnprintf`
+//!
+//! Note that this list is likely to change over time.
+
 #![no_std]
 #![allow(unknown_lints)]
 
-pub use bindings::*;
+pub use self::bindings::*;
+
+// Make sure mbedtls-rs-sys is linked (when using the external MbedTLS).
+#[cfg(feature = "mbedtls-rs-sys")]
+use mbedtls_rs_sys as _;
 
 #[allow(
     non_camel_case_types,
@@ -11,7 +48,7 @@ pub use bindings::*;
     unnecessary_transmutes,
     clippy::all
 )]
-pub mod bindings {
+mod bindings {
     #[cfg(not(target_os = "espidf"))]
     include!(env!("OPENTHREAD_SYS_BINDINGS_FILE"));
 

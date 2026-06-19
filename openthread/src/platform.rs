@@ -7,7 +7,7 @@ use portable_atomic::AtomicUsize;
 
 use openthread_sys::otError_OT_ERROR_NONE;
 
-use crate::sys::{otError, otInstance, otLogLevel, otLogRegion, otRadioFrame};
+use crate::sys::{otError, otInstance, otLogLevel, otLogRegion, otRadioCaps, otRadioFrame};
 use crate::{IntoOtCode, OtActiveState, OtContext};
 
 /// A hack so that we can store a mutable reference to the active state in a global static variable
@@ -70,7 +70,7 @@ extern "C" fn otPlatRadioGetIeeeEui64(instance: *const otInstance, mac: *mut u8)
 }
 
 #[no_mangle]
-extern "C" fn otPlatRadioGetCaps(instance: *const otInstance) -> u8 {
+extern "C" fn otPlatRadioGetCaps(instance: *const otInstance) -> otRadioCaps {
     OtContext::callback(instance).plat_radio_caps()
 }
 
@@ -154,6 +154,11 @@ extern "C" fn otPlatRadioSetPanId(instance: *const otInstance, pan_id: u16) {
 }
 
 #[no_mangle]
+extern "C" fn otPlatRadioSetRxOnWhenIdle(instance: *const otInstance, enable: bool) {
+    OtContext::callback(instance).plat_radio_set_rx_on_when_idle(enable);
+}
+
+#[no_mangle]
 extern "C" fn otPlatRadioTransmit(
     instance: *const otInstance,
     frame: *const otRadioFrame,
@@ -168,6 +173,81 @@ extern "C" fn otPlatRadioReceive(instance: *mut otInstance, channel: u8) -> otEr
     OtContext::callback(instance)
         .plat_radio_receive(channel)
         .into_ot_code()
+}
+
+// --- Source-address match (FTD only) ---
+//
+// OpenThread routers/leaders (FTD) ask the radio to filter frames by the
+// short/extended source addresses of their attached children. These callbacks
+// are only referenced when an FTD `libopenthread-ftd.a` is linked; on MTD they
+// are never called and are dropped by `--gc-sections`.
+//
+// TODO: surface these on the high-level radio trait so a driver can implement
+// real hardware source matching. The defaults below accept-and-ignore (i.e. the
+// radio behaves as if source matching is unavailable), which is functionally
+// safe — OpenThread falls back to indirect transmission without HW assist.
+
+#[no_mangle]
+extern "C" fn otPlatRadioEnableSrcMatch(_instance: *const otInstance, _enable: bool) {}
+
+#[no_mangle]
+extern "C" fn otPlatRadioAddSrcMatchShortEntry(
+    _instance: *const otInstance,
+    _short_address: u16,
+) -> otError {
+    otError_OT_ERROR_NONE
+}
+
+#[no_mangle]
+extern "C" fn otPlatRadioAddSrcMatchExtEntry(
+    _instance: *const otInstance,
+    _ext_address: *const u8,
+) -> otError {
+    otError_OT_ERROR_NONE
+}
+
+#[no_mangle]
+extern "C" fn otPlatRadioClearSrcMatchShortEntry(
+    _instance: *const otInstance,
+    _short_address: u16,
+) -> otError {
+    otError_OT_ERROR_NONE
+}
+
+#[no_mangle]
+extern "C" fn otPlatRadioClearSrcMatchExtEntry(
+    _instance: *const otInstance,
+    _ext_address: *const u8,
+) -> otError {
+    otError_OT_ERROR_NONE
+}
+
+#[no_mangle]
+extern "C" fn otPlatRadioClearSrcMatchShortEntries(_instance: *const otInstance) {}
+
+#[no_mangle]
+extern "C" fn otPlatRadioClearSrcMatchExtEntries(_instance: *const otInstance) {}
+
+// --- PBKDF2 (FTD with commissioning) ---
+//
+// A router acting as a commissioner derives the PSKc via PBKDF2. OpenThread
+// requests it from the platform when `OPENTHREAD_CONFIG_PLATFORM_PBKDF2_ENABLE`
+// is set. Only referenced when both FTD and a commissioning feature are linked.
+//
+// TODO: route this to mbedtls (`mbedtls_pkcs5_pbkdf2_hmac_ext`); for now it
+// reports failure so callers don't silently use an all-zero key.
+#[no_mangle]
+extern "C" fn otPlatCryptoPbkdf2GenerateKey(
+    _password: *const u8,
+    _password_len: u16,
+    _salt: *const u8,
+    _salt_len: u16,
+    _iteration_counter: u32,
+    _key_len: u16,
+    _key: *mut u8,
+) -> otError {
+    // OT_ERROR_NOT_CAPABLE
+    crate::sys::otError_OT_ERROR_NOT_CAPABLE
 }
 
 #[no_mangle]

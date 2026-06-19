@@ -2,28 +2,219 @@
 name = "openthread-sys"
 version = "0.1.0"
 edition = "2021"
+links = "openthread"
+license = "MIT OR Apache-2.0"
 resolver = "2"
+rust-version = "1.84"
 categories = ["embedded", "hardware-support"]
 keywords = ["thread", "openthread", "embedded", "embassy"]
-description = "Platform-agnostic, async Rust bindings for OpenThread"
-repository = "https://github.com/ivmarkov/esp-openthread"
-license = "MIT OR Apache-2.0"
+description = "Raw bindings for OpenThread"
+repository = "https://github.com/esp-rs/openthread"
 readme = "README.md"
-rust-version = "1.84"
+exclude = [
+    "*.pyc",
+    "openthread/.github",
+    "openthread/doc",
+    "openthread/script",
+    # The vendored mbedtls subtree ships its own tests, programs, docs and IDE
+    # project files. We only need the library sources + headers + CMakeLists.
+    "openthread/third_party/mbedtls/repo/tests",
+    "openthread/third_party/mbedtls/repo/programs",
+    "openthread/third_party/mbedtls/repo/framework",
+    "openthread/third_party/mbedtls/repo/docs",
+    "openthread/third_party/mbedtls/repo/visualc",
+    # OpenThread's own `tests/CMakeLists.txt` is unconditionally `add_subdirectory`'d
+    # by the root, but every subdir below it is gated by flags we never set
+    # (`OT_FTD`, `BUILD_TESTING`, `OT_FUZZ_TARGETS`, `OT_PLATFORM=nexus`).
+    # Keeping the top-level CMakeLists; pruning the unreached contents.
+    "openthread/tests/unit",
+    "openthread/tests/gtest",
+    "openthread/tests/fuzz",
+    "openthread/tests/nexus",
+    "openthread/tests/toranj",
+    "openthread/tests/scripts",
+]
 
 [features]
-default = []
+# The default profile is `matter` (= the committed prebuilt `.a` config), so
+# existing consumers and the prebuilt libraries apply as-is. Select individual
+# feature knobs to compile in more OpenThread functionality (forces an
+# on-the-fly rebuild — `--gc-sections` cannot drop unused-but-enabled features
+# because `ot::Instance` aggregates them all). See `gen/features.rs`.
+default = ["matter", "mbedtls-rs-sys"]
+
+# Use the external MbedTLS provided by the `mbedtls-rs-sys` crate, rather than
+# OpenThread's own bundled MbedTLS. See `gen/builder.rs`.
+mbedtls-rs-sys = ["dep:mbedtls-rs-sys"]
+
+# ---------------------------------------------------------------------------
+# Heap configuration (`gen/features.rs::HeapConfig`, `gen/builder.rs`).
+#
+# OpenThread keeps ONE fixed-size internal heap buffer
+# (`OPENTHREAD_CONFIG_HEAP_INTERNAL_SIZE[_NO_DTLS]`), shared by OpenThread's own
+# code AND — when builtin MbedTLS management is on (the default) — by MbedTLS.
+# That buffer is small and non-growable, so memory-hungry scenarios (e.g. Matter
+# + Thread coexistence, where MbedTLS is shared with `rs-matter`) can run it out
+# of memory.
+#
+# Three independent axes tune this. Enabling any of them forces an on-the-fly
+# OpenThread rebuild (the committed prebuilt libraries use the default heap
+# config). The `heap-int-*` set is additive: the largest active size wins.
+# ---------------------------------------------------------------------------
+
+# Redirect OpenThread's OWN heap usage to the global allocator
+# (`OPENTHREAD_CONFIG_HEAP_EXTERNAL_ENABLE=1`). The consumer MUST then provide
+# the `otPlatCAlloc`/`otPlatFree` symbols (forwarding to the firmware's global
+# allocator), exactly like the `calloc`/`free` MbedTLS needs — this crate does
+# not supply them. Independent of the MbedTLS backend.
+heap-ext-ot = []
+
+# Turn OpenThread's builtin MbedTLS management OFF: MbedTLS allocates via the
+# plain `calloc`/`free` symbols — i.e. the firmware's global allocator
+# (`esp-alloc`, etc.) — instead of OpenThread's internal buffer. Only effective
+# with the external MbedTLS (`mbedtls-rs-sys`).
+heap-ext-mbedtls = []
+
+# Resize OpenThread's internal heap buffer to N bytes (both the DTLS and
+# non-DTLS variants). Independent of the ext toggles — the internal buffer may
+# still be used by whichever consumer is not redirected to the global allocator.
+# Keep this list in sync with `features::HEAP_INT_SIZES`.
+heap-int-4096 = []
+heap-int-6144 = []
+heap-int-8192 = []
+heap-int-12288 = []
+heap-int-16384 = []
+heap-int-32768 = []
+heap-int-49152 = []
+heap-int-65536 = []
+
+# ---------------------------------------------------------------------------
+# Device-type / radio-location selection. These pick WHICH static archives are
+# linked (all are always built); they do not change the shared
+# `OPENTHREAD_CONFIG_*` knobs. Additive: absence means the default.
+#
+#   - `ftd` off -> MTD (minimal end-device);  on -> FTD (router-capable)
+#   - `rcp`     -> the 802.15.4 radio is a SEPARATE chip (an OpenThread RCP)
+#                  reached over a UART/SPI transport (spinel); this MCU runs the
+#                  full stack and drives the remote radio via `RadioSpinel`.
+#                  Off (default) = the radio is local to this MCU (SoC mode),
+#                  driven through the `otPlatRadio*` / `Radio`-trait path.
+#
+# `rcp` links `openthread-{mtd,ftd}` + `openthread-radio-spinel` +
+# `openthread-spinel-rcp` + `openthread-hdlc` (cf. OpenThread's POSIX RCP host).
+#
+# NOTE: the *NCP* role (this MCU = radio + full stack, exposed over spinel to a
+# separate host that runs the app via OS sockets + a daemon) is intentionally
+# NOT supported: its host-side API is OS sockets / `ot-ctl`, not the OpenThread
+# Rust API this crate provides — so the `openthread-ncp-*` libraries are not
+# built. See `gen/features.rs`.
+# ---------------------------------------------------------------------------
+ftd = []
+rcp = []
+
 # Always generate the bindings during build, even if pre-built bindings for the build target are available
 force-generate-bindings = []
 # Force the use of the Espressif Riscv GCC toolchain, if the target is a `riscv32*-` target
 # If this feature is not enabled, the build will assume and use the "official" RiscV GCC toolchain:
 # https://github.com/riscv-collab/riscv-gnu-toolchain
-force-esp-riscv-toolchain = []
+force-esp-riscv-gcc = ["use-gcc"]
+# Use GCC instead of clang
+use-gcc = []
+
+# ---------------------------------------------------------------------------
+# Features controlling what OpenThread aspects get compiled in.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Consumer bundles (flat: each lists every leaf it needs).
+# ---------------------------------------------------------------------------
+
+# The exact profile the committed per-target prebuilt libraries are built with
+# (see `xtask`). It MUST equal `default` so the committed `.a` libraries match
+# what default consumers build.
+prebuilt = ["matter", "mbedtls-rs-sys"]
+
+# Barebones profile for Matter: SRP client (service registration), SLAAC
+# (address autoconfig), ECDSA, ping. No provisioning (joiner/commissioner),
+# CoAP, DNS server, TCP, etc. (UDP is core and always available.)
+# (`srp-client` already pulls in `ecdsa`, but it is listed explicitly here too
+# for clarity, since Matter requires ECDSA for operational certificates.)
+matter = ["srp-client", "slaac", "ecdsa", "ping-sender"]
+
+# ---------------------------------------------------------------------------
+# OpenThread feature knobs. Each maps to one or more `OT_*` CMake options in
+# `gen/features.rs`. (Device type MTD/FTD and co-processor role NCP/RCP are NOT
+# features — those are separate `.a` archives, always built; the linker selects
+# which to pull.)
+# ---------------------------------------------------------------------------
+
+# Transport / application protocols
+tcp = []
+coap = []
+coap-block = []        # CoAP block-wise transfer (RFC 7959); implies coap
+coap-observe = []      # CoAP observe (RFC 7641); implies coap
+coaps = ["_ot-dtls"]   # secure CoAP (DTLS) — pulls the DTLS/J-PAKE mbedtls features
+# Service discovery / naming
+# The SRP client persists its host key as an ECDSA P-256 keypair
+# (`Crypto::Ecdsa::P256::KeyPair` in `settings.hpp`), so `OT_SRP_CLIENT` does not
+# compile without `OT_ECDSA`. OpenThread does not enforce this coupling itself,
+# so we express it here.
+srp-client = ["ecdsa"]
+srp-server = []
+dns-client = []
+dnssd-server = []
+mdns = []
+service = []           # TMF network-data service
+netdata-publisher = []
+# IPv6 / addressing
+slaac = []
+dhcp6-client = []
+dhcp6-server = []
+nat64 = []             # NAT64 translator
+# Commissioning — DTLS-based (J-PAKE). Pull the matching mbedtls features.
+joiner = ["_ot-dtls"]
+commissioner = ["_ot-dtls"]
+
+# Internal: the mbedtls-rs-sys feature set OpenThread's DTLS secure transport
+# (MeshCoP / CoAPS / commissioning) needs ON TOP OF the `openthread` mbedtls
+# profile. OpenThread commissioning uses the J-PAKE ciphersuite
+# (`ECJPAKE_WITH_AES_128_CCM_8`) over DTLS 1.2, which needs no X.509 — so we add
+# the DTLS engine (client+server, cookies) plus J-PAKE, but NOT cert handling.
+# Cert-based DTLS (TCAT / ECDHE-ECDSA) is a separate, manual opt-in.
+_ot-dtls = [
+    "mbedtls-rs-sys/tls-engine",
+    "mbedtls-rs-sys/tls-client",
+    "mbedtls-rs-sys/tls-server",
+    "mbedtls-rs-sys/tls-proto-tls12",
+    "mbedtls-rs-sys/tls-proto-dtls",
+    "mbedtls-rs-sys/alg-ecjpake",
+    "mbedtls-rs-sys/kex-ecjpake",
+]
+# Border functionality
+border-router = []
+border-routing = []
+# Diagnostics / management
+ping-sender = []
+link-metrics-initiator = []
+link-metrics-subject = []
+mac-filter = []
+jam-detection = []
+child-supervision = []
+mesh-diag = []
+history-tracker = []
+dataset-updater = []
+# Misc
+ecdsa = []
+sntp-client = []
+trel = []              # Thread Radio Encapsulation Link (TREL)
+
+[dependencies]
+mbedtls-rs-sys = { git = "https://github.com/esp-rs/mbedtls-rs", default-features = false, features = ["openthread"], optional = true }
 
 [build-dependencies]
 anyhow = "1"
-bindgen = "0.71"
-env_logger = "0.10"
+bindgen = "0.72"
+env_logger = "0.11"
 log = "0.4"
 cmake = "0.1.52"
 cc = "1.1"
