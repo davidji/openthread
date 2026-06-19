@@ -32,6 +32,7 @@ pub use fmt::Bytes as BytesFmt;
 pub use nat64::*;
 pub use netdata::*;
 pub use openthread_sys as sys;
+use openthread_sys::{ otNetDataGetNextRoute, otNetDataGetVersion, otThreadGetMeshLocalEid, otThreadGetMeshLocalPrefix, OT_NETWORK_DATA_ITERATOR_INIT};
 pub use radio::*;
 pub use scan::*;
 pub use settings::*;
@@ -68,7 +69,7 @@ use sys::{
     otChangedFlags, otDeviceRole, otDeviceRole_OT_DEVICE_ROLE_CHILD,
     otDeviceRole_OT_DEVICE_ROLE_DETACHED, otDeviceRole_OT_DEVICE_ROLE_DISABLED,
     otDeviceRole_OT_DEVICE_ROLE_LEADER, otDeviceRole_OT_DEVICE_ROLE_ROUTER, 
-    otDnsClientGetDefaultConfig, otError,
+    otError,
     otError_OT_ERROR_ABORT, otError_OT_ERROR_CHANNEL_ACCESS_FAILURE, otError_OT_ERROR_DROP,
     otError_OT_ERROR_NONE, otError_OT_ERROR_NOT_FOUND, otError_OT_ERROR_NO_ACK,
     otError_OT_ERROR_NO_BUFS, otInstance, otInstanceFinalize, otInstanceInitSingle, otIp6Address,
@@ -169,7 +170,7 @@ impl<'a> OpenThread<'a> {
             Err(OtError::new(otError_OT_ERROR_NO_BUFS))?;
         }
 
-        // Needed so that we convert from the the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
+        // Needed so that we convert from the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
         let state = resources.init(
             ieee_eui64,
             unsafe {
@@ -267,7 +268,7 @@ impl<'a> OpenThread<'a> {
         resources: &'a mut OtResources,
         srp_resources: &'a mut OtSrpResources<SRP_SVCS, SRP_BUF_SZ>,
     ) -> Result<Self, OtError> {
-        // Needed so that we convert from the the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
+        // Needed so that we convert from the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
         let state = resources.init(
             ieee_eui64,
             unsafe {
@@ -326,8 +327,8 @@ impl<'a> OpenThread<'a> {
         udp_resources: &'a mut OtUdpResources<UDP_SOCKETS, UDP_RX_SZ>,
         srp_resources: &'a mut OtSrpResources<SRP_SVCS, SRP_BUF_SZ>,
     ) -> Result<Self, OtError> {
-        // Needed so that we convert from the the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
-        // Needed so that we convert from the the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
+        // Needed so that we convert from the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
+        // Needed so that we convert from the actual `'a` lifetime of `rng` to the fake `'static` lifetime in `OtResources`
         let state = resources.init(
             ieee_eui64,
             unsafe {
@@ -457,17 +458,31 @@ impl<'a> OpenThread<'a> {
         f(None)
     }
 
-    pub fn dns_server(&self) -> Result<Ipv6Addr, OtError>
-    {
+    /// Gets an IPV6 address appropriate to configure an IP stack like smoltcp.
+    /// The address is the EID - so it won't change if the topology changes, and it's suitable
+    /// for making outbound connections to services outside the thread network, via the
+    /// boundary router
+    pub fn global_unicast_address(&self) -> Result<Option<(Ipv6Addr, u8)>, OtError> {
         let mut ot = self.activate();
         let state = ot.state();
 
-        let dns_config = unsafe { otDnsClientGetDefaultConfig(state.ot.instance) };
+        let mesh_local_prefix = unsafe { (*otThreadGetMeshLocalPrefix(state.ot.instance)).m8 };
+        let mut addrs_ptr = unsafe { otIp6GetUnicastAddresses(state.ot.instance) };
 
-        let dns_server = unsafe { *dns_config }.mServerSockAddr;
+        while !addrs_ptr.is_null() {
+            let addrs = unwrap!(unsafe { addrs_ptr.as_ref() });
+            let addr: (Ipv6Addr, u8) = (unsafe { addrs.mAddress.mFields.m8 }.into(), addrs.mPrefixLength);
+            // If the address is not link local, and not mesh local, it must be global
+            if !addr.0.is_unicast_link_local() && addr.0.octets()[..8] != mesh_local_prefix {
+                return Ok(Some(addr));
+            }
+            addrs_ptr = addrs.mNext;
+        }
 
-        Ok(unsafe { dns_server.mAddress.mFields.m8 }.into())
+        Ok(None)
     }
+
+
 
     /// Wait for the OpenThread stack to change its state.
     ///
